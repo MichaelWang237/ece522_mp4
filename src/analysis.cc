@@ -153,16 +153,46 @@ void CUDAKernel::getRequiredTensors(std::vector<Tensor *> &required_tensors,
 void tensor_first_pass_liveness_analysis() {
   const int tensor_num = tensor_list.size();
   const int kernel_num = kernel_list.size();
+  bool* seen = new bool[tensor_num];
 
-  for (int i = 0; i < tensor_num; i++) {
-    Tensor *current_tensor = tensor_list[i];
+  for (int knum = 0; knum < kernel_num; knum++) {
+    CUDAKernel current_kernel = kernel_list[knum];
+    std::vector<Tensor*> req_tens;
+    current_kernel.getRequiredTensors(req_tens);
+    std::cout << "Kernel num = " << knum << std::endl; 
+    for(int i = 0; i < req_tens.size(); i++){
+      std::cout << req_tens[i]->tensor_id;
+    }
+    std::cout << std::endl;
     // TODO: complete liveness analysis
-    if (!current_tensor->is_global_weight) {
-      // This tensor is intermediate
-
+    std::vector<Tensor*>::iterator tens_it;
+    for(tens_it = req_tens.begin(); tens_it != req_tens.end(); tens_it++){
+      Tensor* current_tensor = *tens_it;
+      if (!current_tensor->is_global_weight) {
+        // This tensor is intermediate
+        if(!(seen[current_tensor->tensor_id])){ // If this tensor hasn't been seen before, this kernel is its birth
+          current_tensor->live_interval.first = knum;
+          current_tensor->live_interval.second = knum + 1;
+          seen[current_tensor->tensor_id] = true; //Mark as seen
+        }
+        else{
+          current_tensor->live_interval.second = knum + 1;  //Continuously update kernel death
+        }
+      }
     }
     // global tensors do not need this info
   }
+  delete []seen;
+
+  // for (int i = 0; i < tensor_num; i++) {
+  //   Tensor *current_tensor = tensor_list[i];
+  //   // TODO: complete liveness analysis
+  //   if (!current_tensor->is_global_weight) {
+  //     // This tensor is intermediate
+
+  //   }
+  //   // global tensors do not need this info
+  // }
 }
 
 void Tensor::print_liveness() {

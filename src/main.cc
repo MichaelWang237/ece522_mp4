@@ -23,7 +23,7 @@
 #include "printUtils.h"
 
 #define YYDEBUG 1
-
+#define RUN_SIM 0
 using std::chrono::duration;
 using std::chrono::high_resolution_clock;
 
@@ -55,7 +55,7 @@ extern bool is_ideal;
 bool is_UVM = true;
 //   In codegen, num_iteration specifies number of iterations to profile
 //   In simulation, num_iteration specifies number of iterations to run
-int num_iteration = -1;
+int num_iteration = -1; // Specified in config file. No need to change here.
 int is_transformer = -1;
 int borden = 184;
 
@@ -154,6 +154,7 @@ void SimulationParamSanityCheck() {
         CheckVar(num_candidate, "num_candidate");
     else
         CheckVar(num_candidate, "num_candidate", false);
+    std::cout << "num iter" << num_iteration << std::endl;
     CheckVar(num_iteration, "num_iteration");
 
     // parameter validation (value)
@@ -424,7 +425,6 @@ int main(int argc, char *argv[]) {
     if (is_simulation) {
         SimulationParamSanityCheck();
     }
-
     printf("End configs\n\n");
 
     // set random seed
@@ -509,35 +509,38 @@ int main(int argc, char *argv[]) {
         // nprintf("Average interval time: %f ms\n", inactive_periods_list[(inactive_periods_list.size() - 1) / 2]->time_estimated);
         iprintf("Checking output stat files\n", "");
         Simulator::Stat stat(stat_output_file);
-        if (!stat.outputFileExists()) {
-            if (kernel_time_std_dev != 0) {
-                printf("Kernel time variation with std %f\n", kernel_time_std_dev);
-                std::uniform_real_distribution<double> distribution(1 - kernel_time_std_dev, 1 + kernel_time_std_dev);
-                if (ran_seed != 1)
-                {
-                    rand_device.seed((unsigned int)(ran_seed));
+        
+        #if RUN_SIM 
+            if (!stat.outputFileExists()) {
+                if (kernel_time_std_dev != 0) {
+                    printf("Kernel time variation with std %f\n", kernel_time_std_dev);
+                    std::uniform_real_distribution<double> distribution(1 - kernel_time_std_dev, 1 + kernel_time_std_dev);
+                    if (ran_seed != 1)
+                    {
+                        rand_device.seed((unsigned int)(ran_seed));
+                    }
+                    // rand_device.seed((unsigned int)(100*kernel_time_std_dev));
+                    for (int i = 0; i < kernel_list.size(); i++) {
+                        double ratio = distribution(rand_device);
+                        if (ratio < 0.1) ratio = 0.1; // prevent normal distribution to produce a negative number
+                        if (ratio > 1.9) ratio = 1.9; // ensure that the mean is still around 1.0
+                        kernel_list[i].execution_cycles *= ratio;
+                        kernel_list[i].input_pf_execution_cycles *= ratio;
+                        kernel_list[i].pf_execution_cycles *= ratio;
+                        assert(kernel_list[i].execution_cycles > 0);
+                        assert(kernel_list[i].input_pf_execution_cycles > 0);
+                        assert(kernel_list[i].pf_execution_cycles > 0);
+                    }
                 }
-                // rand_device.seed((unsigned int)(100*kernel_time_std_dev));
-                for (int i = 0; i < kernel_list.size(); i++) {
-                    double ratio = distribution(rand_device);
-                    if (ratio < 0.1) ratio = 0.1; // prevent normal distribution to produce a negative number
-                    if (ratio > 1.9) ratio = 1.9; // ensure that the mean is still around 1.0
-                    kernel_list[i].execution_cycles *= ratio;
-                    kernel_list[i].input_pf_execution_cycles *= ratio;
-                    kernel_list[i].pf_execution_cycles *= ratio;
-                    assert(kernel_list[i].execution_cycles > 0);
-                    assert(kernel_list[i].input_pf_execution_cycles > 0);
-                    assert(kernel_list[i].pf_execution_cycles > 0);
-                }
+                iprintf("\nPerforming Simulation\n", "");
+                Simulator::EventSimulator *sim = new Simulator::EventSimulator(stat_output_file);
+                sim->run(num_iteration);
+                delete sim; // make sure stats are written back to the files
             }
-            iprintf("\nPerforming Simulation\n", "");
-            Simulator::EventSimulator *sim = new Simulator::EventSimulator(stat_output_file);
-            sim->run(num_iteration);
-            delete sim; // make sure stats are written back to the files
-        }
-        iprintf("\nPerforming Analysis\n", "");
-        stat.prepareOutputFiles(true);
-        stat.analyzeStat();
+            iprintf("\nPerforming Analysis\n", "");
+            stat.prepareOutputFiles(true);
+            stat.analyzeStat();
+        #endif
     }
 
     // for (int i = 0; i < forward_layers.size(); i++)
