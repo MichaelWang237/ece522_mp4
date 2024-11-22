@@ -195,6 +195,8 @@ void tensor_first_pass_liveness_analysis() {
   // }
 }
 
+#define INACTIVE_BEGINNING 0
+#define INACTIVE_END 1
 void Tensor::print_liveness() {
   this->print();
   if (!this->is_global_weight) {
@@ -219,10 +221,35 @@ void tensor_second_pass_interval_formation() {
     // TODO: complete inactive period analysis
     if (!current_tensor->is_global_weight) {
       // This tensor is intermediate
-
+      int curr_kernel = 0;
+      InactivePeriod inactive_period(current_tensor);
+      for (int k = 0; k < kernel_num; k++){ // Iterate through all kernels
+        int looking_for = INACTIVE_BEGINNING; 
+        CUDAKernel curr_kernel = kernel_list[k]; 
+        std::vector<Tensor*> req_tens;
+        curr_kernel.getRequiredTensors(req_tens); // For each kernel, check if it uses current_tensor
+        bool found = !(std::find(req_tens.begin(), req_tens.end(), current_tensor) == req_tens.end()); 
+        if(looking_for == INACTIVE_BEGINNING){ //Start of inactive period is the first kernel that doesn't need the tensor
+          if(!found){
+            inactive_period.kernelLevel_interval.first = curr_kernel.kernel_id;
+            looking_for = INACTIVE_END;
+          }
+        }
+        else{ // looking_for = INACTIVE_END
+          if(found){ // Inactive period ends when the tensor is used ... 
+            inactive_period.kernelLevel_interval.second = curr_kernel.kernel_id;
+            current_tensor->inactive_periods.push_back(&inactive_period);
+            looking_for = INACTIVE_BEGINNING;
+          }
+          else if(k == kernel_num - 1){ // OR when we reach the end of the DNN
+            inactive_period.kernelLevel_interval.second = curr_kernel.kernel_id + 1; // One past last kernel
+            current_tensor->inactive_periods.push_back(&inactive_period);
+            looking_for = INACTIVE_BEGINNING;
+          }
+        }
+      }
     } else {
       // This tensor is global
-
     }
   }
 }
