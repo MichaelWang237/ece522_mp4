@@ -184,19 +184,8 @@ void tensor_first_pass_liveness_analysis() {
   }
   delete []seen;
 
-  // for (int i = 0; i < tensor_num; i++) {
-  //   Tensor *current_tensor = tensor_list[i];
-  //   // TODO: complete liveness analysis
-  //   if (!current_tensor->is_global_weight) {
-  //     // This tensor is intermediate
-
-  //   }
-  //   // global tensors do not need this info
-  // }
 }
 
-#define INACTIVE_BEGINNING 0
-#define INACTIVE_END 1
 void Tensor::print_liveness() {
   this->print();
   if (!this->is_global_weight) {
@@ -212,6 +201,10 @@ void Tensor::print_liveness() {
  * @todo you should fill the field inactive_periods for each tensor in the tensor_list
  *       see descriptions of inactive_periods in Tensor::inactive_periods
  */
+#define INACTIVE_BEGINNING 0
+#define INACTIVE_END 1
+#define PASS2VERBOSE 0
+
 void tensor_second_pass_interval_formation() {
   const int tensor_num = tensor_list.size();
   const int kernel_num = kernel_list.size();
@@ -221,35 +214,72 @@ void tensor_second_pass_interval_formation() {
     // TODO: complete inactive period analysis
     if (!current_tensor->is_global_weight) {
       // This tensor is intermediate
-      int curr_kernel = 0;
-      InactivePeriod inactive_period(current_tensor);
+      int looking_for = INACTIVE_BEGINNING; 
+      
+      InactivePeriod* inactive_period = new InactivePeriod(current_tensor);
+      #if PASS2VERBOSE 
+      std::cout << "Ptr: " << inactive_period << std::endl;
+      #endif
       for (int k = 0; k < kernel_num; k++){ // Iterate through all kernels
-        int looking_for = INACTIVE_BEGINNING; 
         CUDAKernel curr_kernel = kernel_list[k]; 
         std::vector<Tensor*> req_tens;
         curr_kernel.getRequiredTensors(req_tens); // For each kernel, check if it uses current_tensor
         bool found = !(std::find(req_tens.begin(), req_tens.end(), current_tensor) == req_tens.end()); 
         if(looking_for == INACTIVE_BEGINNING){ //Start of inactive period is the first kernel that doesn't need the tensor
           if(!found){
-            inactive_period.kernelLevel_interval.first = curr_kernel.kernel_id;
+            #if PASS2VERBOSE 
+            std::cout << "Starting period for t_num ="<< current_tensor->tensor_id<< "at " << curr_kernel.kernel_id << std::endl;
+            #endif
+            inactive_period->kernelLevel_interval.first = curr_kernel.kernel_id;
+            inactive_period->time_estimated = (curr_kernel.execution_cycles * 1000) / (1000000000 * GPU_frequency_GHz); // Multiply by 1000 for sec->ms
             looking_for = INACTIVE_END;
           }
         }
         else{ // looking_for = INACTIVE_END
+          inactive_period->time_estimated += (curr_kernel.execution_cycles * 1000) / (1000000000 * GPU_frequency_GHz); // Multiply by 1000 for sec->ms
           if(found){ // Inactive period ends when the tensor is used ... 
-            inactive_period.kernelLevel_interval.second = curr_kernel.kernel_id;
-            current_tensor->inactive_periods.push_back(&inactive_period);
+            #if PASS2VERBOSE 
+            std::cout << "Ending period for t_num = "<< current_tensor->tensor_id<< "at " << curr_kernel.kernel_id << std::endl;
+            #endif
+            inactive_period->kernelLevel_interval.second = curr_kernel.kernel_id;
+            inactive_period->time_estimated -= (curr_kernel.execution_cycles * 1000) / (1000000000 * GPU_frequency_GHz); //If used by this kernel, don't include exec time.
+            current_tensor->inactive_periods.push_back(inactive_period);
             looking_for = INACTIVE_BEGINNING;
+            inactive_period = new InactivePeriod(current_tensor);
+            #if PASS2VERBOSE 
+            std::cout << "Ptr: " << inactive_period << std::endl;
+            #endif
           }
-          else if(k == kernel_num - 1){ // OR when we reach the end of the DNN
-            inactive_period.kernelLevel_interval.second = curr_kernel.kernel_id + 1; // One past last kernel
-            current_tensor->inactive_periods.push_back(&inactive_period);
+          else if(k == kernel_num - 1){ // OR we reach the end of the DNN
+            #if PASS2VERBOSE 
+            std::cout << "DNN end reached: t_num = "<< current_tensor->tensor_id<< "at " << curr_kernel.kernel_id + 1 << std::endl;
+            #endif
+            inactive_period->kernelLevel_interval.second = curr_kernel.kernel_id + 1; // One past last kernel
+            current_tensor->inactive_periods.push_back(inactive_period);
             looking_for = INACTIVE_BEGINNING;
+            inactive_period = new InactivePeriod(current_tensor);
+
+            #if PASS2VERBOSE 
+            std::cout << "Ptr: " << inactive_period << std::endl;
+            #endif
           }
         }
       }
-    } else {
-      // This tensor is global
+      #if PASS2VERBOSE 
+      std::vector<InactivePeriod*>::iterator inactive_iterator;
+      for(inactive_iterator = current_tensor->inactive_periods.begin(); inactive_iterator < current_tensor->inactive_periods.end();
+          inactive_iterator++){
+            InactivePeriod* tmp= *inactive_iterator;
+              std::cout << "Interval = " << tmp->kernelLevel_interval.first << " " << tmp->kernelLevel_interval.second << std::endl;
+          }
+      #endif
+    }
+    else{ // global tensor
+      InactivePeriod* inactive_period = new InactivePeriod(current_tensor);
+      inactive_period->is_looped = true; // set is_looped true for globals.
+      inactive_period->time_estimated = 0.0;
+      current_tensor->inactive_periods.push_back(inactive_period);
+
     }
   }
 }
